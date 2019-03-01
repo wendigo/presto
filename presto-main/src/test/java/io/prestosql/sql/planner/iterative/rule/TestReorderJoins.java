@@ -76,6 +76,7 @@ public class TestReorderJoins
         tester = new RuleTester(
                 ImmutableList.of(),
                 ImmutableMap.of(
+                        JOIN_MAX_BROADCAST_TABLE_SIZE, "1PB",
                         JOIN_DISTRIBUTION_TYPE, JoinDistributionType.AUTOMATIC.name(),
                         JOIN_REORDERING_STRATEGY, JoinReorderingStrategy.AUTOMATIC.name()),
                 Optional.of(4));
