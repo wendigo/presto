@@ -84,6 +84,7 @@ import static io.prestosql.execution.QueryState.TERMINAL_QUERY_STATES;
 import static io.prestosql.execution.QueryState.WAITING_FOR_RESOURCES;
 import static io.prestosql.execution.StageInfo.getAllStages;
 import static io.prestosql.memory.LocalMemoryManager.GENERAL_POOL;
+import static io.prestosql.spi.StandardErrorCode.EXCEEDED_TIME_LIMIT;
 import static io.prestosql.spi.StandardErrorCode.NOT_FOUND;
 import static io.prestosql.spi.StandardErrorCode.USER_CANCELED;
 import static io.prestosql.util.Failures.toFailure;
@@ -801,8 +802,21 @@ public class QueryStateMachine
         queryState.setIf(FINISHED, currentState -> !currentState.isDone());
     }
 
+    private boolean hasTimedOutWhileFinishing(Throwable throwable)
+    {
+        if (throwable instanceof PrestoException && ((PrestoException)throwable).getErrorCode() == EXCEEDED_TIME_LIMIT.toErrorCode()) {
+            return this.getQueryState() == FINISHING;
+        }
+
+        return false;
+    }
+
     public boolean transitionToFailed(Throwable throwable)
     {
+        if (hasTimedOutWhileFinishing(throwable)) {
+            return false;
+        }
+
         cleanupQueryQuietly();
         queryStateTimer.endQuery();
 

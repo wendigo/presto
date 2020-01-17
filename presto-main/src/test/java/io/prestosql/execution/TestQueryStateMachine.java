@@ -57,6 +57,7 @@ import static io.prestosql.execution.QueryState.RUNNING;
 import static io.prestosql.execution.QueryState.STARTING;
 import static io.prestosql.execution.QueryState.WAITING_FOR_RESOURCES;
 import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
+import static io.prestosql.spi.StandardErrorCode.EXCEEDED_TIME_LIMIT;
 import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.prestosql.spi.StandardErrorCode.USER_CANCELED;
 import static io.prestosql.spi.type.BigintType.BIGINT;
@@ -342,6 +343,18 @@ public class TestQueryStateMachine
         assertEquals(queryStats.getFinishingTime().toMillis(), 0);
         // query execution time is starts when query transitions to planning
         assertEquals(queryStats.getExecutionTime().toMillis(), 900);
+    }
+
+    @Test
+    public void testShouldNotFailWhenTimedOutDuringFinishing()
+    {
+        QueryStateMachine stateMachine = createQueryStateMachine();
+        assertTrue(stateMachine.transitionToFinishing());
+
+        assertFalse(stateMachine.transitionToFailed(new PrestoException(EXCEEDED_TIME_LIMIT, "")));
+
+        tryGetFutureValue(stateMachine.getStateChange(FINISHING), 2, SECONDS);
+        assertState(stateMachine, FINISHED);
     }
 
     @Test
