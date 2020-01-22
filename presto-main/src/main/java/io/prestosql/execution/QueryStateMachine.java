@@ -84,6 +84,7 @@ import static io.prestosql.execution.QueryState.TERMINAL_QUERY_STATES;
 import static io.prestosql.execution.QueryState.WAITING_FOR_RESOURCES;
 import static io.prestosql.execution.StageInfo.getAllStages;
 import static io.prestosql.memory.LocalMemoryManager.GENERAL_POOL;
+import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.prestosql.spi.StandardErrorCode.NOT_FOUND;
 import static io.prestosql.spi.StandardErrorCode.USER_CANCELED;
 import static io.prestosql.util.Failures.toFailure;
@@ -125,6 +126,8 @@ public class QueryStateMachine
 
     private final StateMachine<QueryState> queryState;
     private final AtomicBoolean queryCleanedUp = new AtomicBoolean();
+
+    private final AtomicBoolean nonPreemptible = new AtomicBoolean();
 
     private final AtomicReference<String> setCatalog = new AtomicReference<>();
     private final AtomicReference<String> setSchema = new AtomicReference<>();
@@ -727,38 +730,38 @@ public class QueryStateMachine
     public boolean transitionToWaitingForResources()
     {
         queryStateTimer.beginWaitingForResources();
-        return queryState.setIf(WAITING_FOR_RESOURCES, currentState -> currentState.ordinal() < WAITING_FOR_RESOURCES.ordinal());
+        return queryState.setIf(WAITING_FOR_RESOURCES, currentState -> canPreemptCurrentState() && currentState.ordinal() < WAITING_FOR_RESOURCES.ordinal());
     }
 
     public boolean transitionToDispatching()
     {
         queryStateTimer.beginDispatching();
-        return queryState.setIf(DISPATCHING, currentState -> currentState.ordinal() < DISPATCHING.ordinal());
+        return queryState.setIf(DISPATCHING, currentState -> canPreemptCurrentState() && currentState.ordinal() < DISPATCHING.ordinal());
     }
 
     public boolean transitionToPlanning()
     {
         queryStateTimer.beginPlanning();
-        return queryState.setIf(PLANNING, currentState -> currentState.ordinal() < PLANNING.ordinal());
+        return queryState.setIf(PLANNING, currentState -> canPreemptCurrentState() && currentState.ordinal() < PLANNING.ordinal());
     }
 
     public boolean transitionToStarting()
     {
         queryStateTimer.beginStarting();
-        return queryState.setIf(STARTING, currentState -> currentState.ordinal() < STARTING.ordinal());
+        return queryState.setIf(STARTING, currentState -> canPreemptCurrentState() && currentState.ordinal() < STARTING.ordinal());
     }
 
     public boolean transitionToRunning()
     {
         queryStateTimer.beginRunning();
-        return queryState.setIf(RUNNING, currentState -> currentState.ordinal() < RUNNING.ordinal());
+        return queryState.setIf(RUNNING, currentState -> canPreemptCurrentState() && currentState.ordinal() < RUNNING.ordinal());
     }
 
     public boolean transitionToFinishing()
     {
         queryStateTimer.beginFinishing();
 
-        if (!queryState.setIf(FINISHING, currentState -> currentState != FINISHING && !currentState.isDone())) {
+        if (!queryState.setIf(FINISHING, currentState -> canPreemptCurrentState() && currentState != FINISHING && !currentState.isDone())) {
             return false;
         }
 
@@ -771,19 +774,28 @@ public class QueryStateMachine
         }
 
         Optional<TransactionId> transactionId = session.getTransactionId();
+
         if (transactionId.isPresent() && transactionManager.transactionExists(transactionId.get()) && transactionManager.isAutoCommit(transactionId.get())) {
+            if (!setNotPreemptibleState()) {
+                transitionToFailed(new PrestoException(GENERIC_INTERNAL_ERROR, "Could not start commit"));
+                return true;
+            }
+
             ListenableFuture<?> commitFuture = transactionManager.asyncCommit(transactionId.get());
+
             Futures.addCallback(commitFuture, new FutureCallback<Object>()
             {
                 @Override
                 public void onSuccess(@Nullable Object result)
                 {
+                    unsetNotPreemptibleState();
                     transitionToFinished();
                 }
 
                 @Override
                 public void onFailure(Throwable throwable)
                 {
+                    unsetNotPreemptibleState();
                     transitionToFailed(throwable);
                 }
             }, directExecutor());
@@ -794,11 +806,39 @@ public class QueryStateMachine
         return true;
     }
 
+    private boolean setNotPreemptibleState()
+    {
+        if (nonPreemptible.compareAndSet(false, true)) {
+            QUERY_STATE_LOG.debug("Query %s entered non-preemptible state %s", queryId, queryState.get());
+            return true;
+        }
+
+        return false;
+    }
+
+    private boolean unsetNotPreemptibleState()
+    {
+        if (nonPreemptible.compareAndSet(true, false)) {
+            QUERY_STATE_LOG.debug("Query %s left non-preemptible state %s", queryId, queryState.get());
+            return true;
+        }
+        else {
+            QUERY_STATE_LOG.debug("Query %s should be in non-preemptible state %s but it's not", queryId, queryState.get());
+        }
+
+        return false;
+    }
+
+    private boolean canPreemptCurrentState()
+    {
+        return !nonPreemptible.get();
+    }
+
     private void transitionToFinished()
     {
         queryStateTimer.endQuery();
 
-        queryState.setIf(FINISHED, currentState -> !currentState.isDone());
+        queryState.setIf(FINISHED, currentState -> canPreemptCurrentState() && !currentState.isDone());
     }
 
     public boolean transitionToFailed(Throwable throwable)
@@ -812,7 +852,7 @@ public class QueryStateMachine
         requireNonNull(throwable, "throwable is null");
         failureCause.compareAndSet(null, toFailure(throwable));
 
-        boolean failed = queryState.setIf(FAILED, currentState -> !currentState.isDone());
+        boolean failed = queryState.setIf(FAILED, currentState -> canPreemptCurrentState() && !currentState.isDone());
         if (failed) {
             QUERY_STATE_LOG.debug(throwable, "Query %s failed", queryId);
             session.getTransactionId().ifPresent(transactionId -> {
@@ -824,8 +864,12 @@ public class QueryStateMachine
                 }
             });
         }
+        else if (!canPreemptCurrentState()) {
+            QUERY_STATE_LOG.debug(throwable, "Query %s tried to fail while in non-preemptible state: %s", queryId, queryState.get(), throwable);
+            return true;
+        }
         else {
-            QUERY_STATE_LOG.debug(throwable, "Failure after query %s finished", queryId);
+            QUERY_STATE_LOG.debug(throwable, "Query %s failed while finished: %s", queryId, throwable);
         }
 
         return failed;
@@ -841,7 +885,7 @@ public class QueryStateMachine
         // can only be observed if the transition to FAILED is successful.
         failureCause.compareAndSet(null, toFailure(new PrestoException(USER_CANCELED, "Query was canceled")));
 
-        boolean canceled = queryState.setIf(FAILED, currentState -> !currentState.isDone());
+        boolean canceled = queryState.setIf(FAILED, currentState -> canPreemptCurrentState() && !currentState.isDone());
         if (canceled) {
             session.getTransactionId().ifPresent(transactionId -> {
                 if (transactionManager.isAutoCommit(transactionId)) {
@@ -851,6 +895,9 @@ public class QueryStateMachine
                     transactionManager.fail(transactionId);
                 }
             });
+        }
+        else if (!canPreemptCurrentState()) {
+            QUERY_STATE_LOG.debug("Query %s tried to cancel while in non-preemptible state %s", queryId, queryState.get());
         }
 
         return canceled;
