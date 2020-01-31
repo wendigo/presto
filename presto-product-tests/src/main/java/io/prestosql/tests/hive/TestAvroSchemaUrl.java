@@ -158,9 +158,28 @@ public class TestAvroSchemaUrl
         onPresto().executeQuery("DROP TABLE test_avro_schema_url_presto");
     }
 
+    @Test(dataProvider = "avroSchemaLocations", groups = STORAGE_FORMATS)
+    public void testPrestoCreatedTableStatistics(String schemaLocation)
+    {
+        onPresto().executeQuery("DROP TABLE IF EXISTS test_avro_schema_url_presto");
+        onPresto().executeQuery(format("CREATE TABLE test_avro_schema_url_presto (dummy_col VARCHAR) WITH (format='AVRO', avro_schema_url='%s')", schemaLocation));
+        onPresto().executeQuery("INSERT INTO test_avro_schema_url_presto VALUES ('some text', 123042)");
+
+        assertThat(onPresto().executeQuery("SHOW STATS FOR test_avro_schema_url_presto")).hasRowsCount(3);
+
+        onPresto().executeQuery("DROP TABLE test_avro_schema_url_presto");
+    }
+
     @Test(groups = STORAGE_FORMATS)
     public void testTableWithLongColumnType()
     {
+        if (isOnHdp()) {
+            // HDP 2.6 won't allow to define a partitioned table with schema having a column with type definition over 2000 characters.
+            // It is possible to create table with simpler schema and then alter the schema, but that results in different end state on CDH.
+            // To retain proper test coverage on CDH, this test needs to be disabled on HDP.
+            throw new SkipException("Skipping on HDP");
+        }
+
         onPresto().executeQuery("DROP TABLE IF EXISTS test_avro_schema_url_long_column");
         onPresto().executeQuery(
                 "CREATE TABLE test_avro_schema_url_long_column (dummy_col VARCHAR)" +
