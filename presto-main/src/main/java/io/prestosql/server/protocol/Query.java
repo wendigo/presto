@@ -16,7 +16,6 @@ package io.prestosql.server.protocol;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -30,7 +29,6 @@ import io.prestosql.client.Column;
 import io.prestosql.client.FailureInfo;
 import io.prestosql.client.NamedClientTypeSignature;
 import io.prestosql.client.QueryError;
-import io.prestosql.client.QueryResults;
 import io.prestosql.client.RowFieldName;
 import io.prestosql.client.StageStats;
 import io.prestosql.client.StatementStats;
@@ -50,6 +48,7 @@ import io.prestosql.execution.buffer.SerializedPage;
 import io.prestosql.operator.ExchangeClient;
 import io.prestosql.spi.ErrorCode;
 import io.prestosql.spi.Page;
+import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.PrestoWarning;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.WarningCode;
@@ -70,7 +69,6 @@ import javax.ws.rs.core.UriInfo;
 
 import java.net.URI;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -79,6 +77,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.function.Consumer;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -91,6 +90,7 @@ import static io.prestosql.SystemSessionProperties.isExchangeCompressionEnabled;
 import static io.prestosql.execution.QueryState.FAILED;
 import static io.prestosql.server.protocol.Slug.Context.EXECUTING_QUERY;
 import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
+import static io.prestosql.spi.StandardErrorCode.SERIALIZATION_ERROR;
 import static io.prestosql.util.Failures.toFailure;
 import static io.prestosql.util.MoreLists.mappedCopy;
 import static java.lang.String.format;
@@ -370,6 +370,26 @@ class Query
         return Optional.empty();
     }
 
+    private static Consumer<TypeSerializationException> interceptSerializationExceptions(QueryManager queryManager, QueryId id)
+    {
+        return error -> {
+            log.warn("Query %s could not serialize value at row %d, column '%s' of type %s",
+                    id,
+                    error.getRow(),
+                    error.getColumnName().getName(),
+                    error.getColumnName().getType(),
+                    error.getException());
+
+            queryManager.failQuery(id, new PrestoException(
+                    SERIALIZATION_ERROR,
+                    format("Could not serialize value at row %d, column '%s' of type %s: ",
+                            error.getRow(),
+                            error.getColumnName().getName(),
+                            error.getColumnName().getType()),
+                    error.getException()));
+        };
+    }
+
     private synchronized QueryResults getNextResult(long token, UriInfo uriInfo, String scheme, DataSize targetResultSize)
     {
         // check if the result for the token have already been created
@@ -391,11 +411,14 @@ class Query
         // client while holding the lock because the query may transition to the finished state when the
         // last page is removed.  If another thread observes this state before the response is cached
         // the pages will be lost.
-        Iterable<List<Object>> data = null;
+        RowIterables.Builder rows = RowIterables
+                .builder(session.toConnectorSession())
+                .withExceptionListener(interceptSerializationExceptions(queryManager, queryId))
+                .withColumns(columns)
+                .withTypes(types);
+
         try {
-            ImmutableList.Builder<RowIterable> pages = ImmutableList.builder();
             long bytes = 0;
-            long rows = 0;
             long targetResultBytes = targetResultSize.toBytes();
             while (bytes < targetResultBytes) {
                 SerializedPage serializedPage = exchangeClient.pollPage();
@@ -405,12 +428,7 @@ class Query
 
                 Page page = serde.deserialize(serializedPage);
                 bytes += page.getLogicalSizeInBytes();
-                rows += page.getPositionCount();
-                pages.add(new RowIterable(session.toConnectorSession(), types, page));
-            }
-            if (rows > 0) {
-                // client implementations do not properly handle empty list of data
-                data = Iterables.concat(pages.build());
+                rows.add(page);
             }
         }
         catch (Throwable cause) {
@@ -422,25 +440,23 @@ class Query
         QueryInfo queryInfo = queryManager.getFullQueryInfo(queryId);
         queryManager.recordHeartbeat(queryId);
 
+        RowIterables data = rows.build();
+
         // TODO: figure out a better way to do this
         // grab the update count for non-queries
-        if ((data != null) && (queryInfo.getUpdateType() != null) && (updateCount == null) &&
+        if (!data.isEmpty() && (queryInfo.getUpdateType() != null) && (updateCount == null) &&
                 (columns.size() == 1) && (columns.get(0).getType().equals(StandardTypes.BIGINT))) {
-            Iterator<List<Object>> iterator = data.iterator();
-            if (iterator.hasNext()) {
-                Number number = (Number) iterator.next().get(0);
-                if (number != null) {
-                    updateCount = number.longValue();
-                }
-            }
+            updateCount = data.getUpdateCount();
         }
 
         closeExchangeClientIfNecessary(queryInfo);
 
         // for queries with no output, return a fake result for clients that require it
         if ((queryInfo.getState() == QueryState.FINISHED) && !queryInfo.getOutputStage().isPresent()) {
-            columns = ImmutableList.of(createColumn("result", BooleanType.BOOLEAN));
-            data = ImmutableSet.of(ImmutableList.of(true));
+            data = RowIterables.builder(session.toConnectorSession())
+                .withSingleBooleanResult(true)
+                .withColumns(ImmutableList.of(createColumn("result", BooleanType.BOOLEAN)))
+                .build();
         }
 
         // advance next token
@@ -490,7 +506,7 @@ class Query
                 queryHtmlUri,
                 partialCancelUri,
                 nextResultsUri,
-                columns,
+                data.getColumns(),
                 data,
                 toStatementStats(queryInfo),
                 toQueryError(queryInfo),

@@ -21,7 +21,6 @@ import io.airlift.log.Logger;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.prestosql.Session;
-import io.prestosql.client.QueryResults;
 import io.prestosql.execution.QueryManager;
 import io.prestosql.memory.context.SimpleLocalMemoryContext;
 import io.prestosql.operator.ExchangeClient;
