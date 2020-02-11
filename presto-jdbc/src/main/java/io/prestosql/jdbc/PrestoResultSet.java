@@ -22,6 +22,7 @@ import io.prestosql.client.IntervalDayTime;
 import io.prestosql.client.IntervalYearMonth;
 import io.prestosql.client.QueryError;
 import io.prestosql.client.QueryStatusInfo;
+import io.prestosql.client.SerializationError;
 import io.prestosql.client.StatementClient;
 import io.prestosql.jdbc.ColumnInfo.Nullable;
 import org.joda.time.DateTimeZone;
@@ -1870,6 +1871,11 @@ public class PrestoResultSet
                     throw e;
                 }
 
+                if (client.getFirstSerializationError().isPresent()) {
+                    SerializationError serializationError = client.getFirstSerializationError().get();
+                    throw new RuntimeException(format("Seri"));
+                }
+
                 if (data != null) {
                     return data;
                 }
@@ -1879,6 +1885,7 @@ public class PrestoResultSet
             QueryStatusInfo results = client.finalStatusInfo();
             progressCallback.accept(QueryStats.create(results.getId(), results.getStats()));
             warningsManager.addWarnings(results.getWarnings());
+
             if (results.getError() != null) {
                 throw new RuntimeException(resultsException(results));
             }

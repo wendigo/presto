@@ -37,4 +37,6 @@ public interface QueryStatusInfo
     String getUpdateType();
 
     Long getUpdateCount();
+
+    List<SerializationError> getSerializationErrors();
 }

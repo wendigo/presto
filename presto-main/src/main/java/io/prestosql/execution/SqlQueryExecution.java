@@ -521,7 +521,6 @@ public class SqlQueryExecution
     public void fail(Throwable cause)
     {
         requireNonNull(cause, "cause is null");
-
         stateMachine.transitionToFailed(cause);
     }
 

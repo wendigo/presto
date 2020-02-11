@@ -191,6 +191,11 @@ public class Query
             return false;
         }
 
+        if (client.getFirstSerializationError().isPresent()) {
+            errorChannel.println("Serialization errors on the server side: " + client.getFirstSerializationError().get());
+            return false;
+        }
+
         verify(client.isFinished());
         if (client.finalStatusInfo().getError() != null) {
             renderFailure(errorChannel);

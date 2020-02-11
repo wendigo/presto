@@ -106,6 +106,7 @@ class StatementClientV1
     private final Map<String, String> addedPreparedStatements = new ConcurrentHashMap<>();
     private final Set<String> deallocatedPreparedStatements = Sets.newConcurrentHashSet();
     private final AtomicReference<String> startedTransactionId = new AtomicReference<>();
+    private final AtomicReference<SerializationError> serializationError = new AtomicReference<>();
     private final AtomicBoolean clearTransactionId = new AtomicBoolean();
     private final ZoneId timeZone;
     private final Duration requestTimeoutNanos;
@@ -247,6 +248,12 @@ class StatementClientV1
     public StatementStats getStats()
     {
         return currentResults.get().getStats();
+    }
+
+    @Override
+    public Optional<SerializationError> getFirstSerializationError()
+    {
+        return Optional.ofNullable(serializationError.get());
     }
 
     @Override
@@ -447,6 +454,10 @@ class StatementClientV1
         }
         if (headers.get(PRESTO_CLEAR_TRANSACTION_ID) != null) {
             clearTransactionId.set(true);
+        }
+
+        if (results.getSerializationErrors().size() > 0) {
+            serializationError.compareAndSet(null, results.getSerializationErrors().get(0));
         }
 
         currentResults.set(results);

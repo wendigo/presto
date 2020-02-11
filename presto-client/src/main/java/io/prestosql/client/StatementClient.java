@@ -38,6 +38,11 @@ public interface StatementClient
 
     StatementStats getStats();
 
+    default Optional<SerializationError> getFirstSerializationError()
+    {
+        return Optional.empty();
+    }
+
     QueryStatusInfo currentStatusInfo();
 
     QueryData currentData();

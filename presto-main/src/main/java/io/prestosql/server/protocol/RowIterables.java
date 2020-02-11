@@ -13,6 +13,7 @@
  */
 package io.prestosql.server.protocol;
 
+import com.google.common.base.MoreObjects;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
@@ -23,11 +24,13 @@ import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.type.Type;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.Iterator;
 import java.util.List;
-import java.util.function.Consumer;
 
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Verify.verify;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
 import static java.util.Collections.emptyList;
@@ -37,39 +40,34 @@ import static java.util.Objects.requireNonNull;
 public class RowIterables
         extends AbstractIterator<List<Object>>
         implements Iterable<List<Object>>
-
 {
     private final ConnectorSession session;
-    private final List<Consumer<TypeSerializationException>> exceptionConsumers;
-
-    private List<Type> types;
-    private List<Column> columns;
-    private List<Page> pages;
-
-    private int rowsCount;
-    private int pagePosition = -1;
-    private int rowPosition = -1;
+    private final List<Type> types;
+    private final List<Column> columns;
+    private final Deque<Page> pages;
+    private final List<TypeSerializationException> exceptions = new ArrayList<>();
+    private final int totalRows;
 
     private Page currentPage;
-    private int pageIndex;
+    private int rowPosition = -1;
+    private int inPageIndex;
 
-    private RowIterables(ConnectorSession session, List<Consumer<TypeSerializationException>> exceptionConsumers, List<Type> types, List<Column> columns, List<Page> pages)
+    private RowIterables(ConnectorSession session, List<Type> types, List<Column> columns, List<Page> pages)
     {
         this.session = requireNonNull(session, "session is null");
         this.types = requireNonNull(types, "types is null");
-        this.exceptionConsumers = requireNonNull(exceptionConsumers, "exceptionConsumers is null");
         this.columns = requireNonNull(columns, "columns is null");
-        this.pages = requireNonNull(pages, "pages is null");
-        this.rowsCount = countRows(pages);
-        this.currentPage = null;
-        this.pageIndex = 0;
+        this.pages = new ArrayDeque<>(requireNonNull(pages, "pages is null"));
+        this.totalRows = countRows(pages);
+        this.currentPage = this.pages.pollFirst();
+        this.inPageIndex = 0;
 
         verify(this.types.size() == this.columns.size(), "columns and types sizes mismatch");
     }
 
     public boolean isEmpty()
     {
-        return rowsCount == 0;
+        return totalRows == 0;
     }
 
     public List<Column> getColumns()
@@ -77,15 +75,18 @@ public class RowIterables
         return columns;
     }
 
-    public int getRowsCount()
+    public int getTotalRows()
     {
-        return rowsCount;
+        return totalRows;
     }
 
     public Long getUpdateCount()
     {
-        if (rowsCount == 1 && columns.size() == 1) {
-            Block block = pages.get(0).getBlock(0);
+        if (totalRows == 1 && columns.size() == 1) {
+            Page firstPage = pages.peekFirst();
+            checkNotNull(firstPage, "firstPage is null");
+
+            Block block = firstPage.getBlock(0);
             Number value = (Number) types.get(0).getObjectValue(session, block, 0);
 
             if (value != null) {
@@ -99,49 +100,55 @@ public class RowIterables
     @Override
     protected List<Object> computeNext()
     {
-        pagePosition++;
+        loop:
+        while (true) {
+            inPageIndex++;
 
-        if (rowPosition >= rowsCount || pageIndex >= pages.size()) {
-            return endOfData();
-        }
-
-        currentPage = pages.get(pageIndex);
-
-        if (pagePosition >= currentPage.getPositionCount()) {
-            if (pageIndex < pages.size()) {
-                pagePosition = 0;
-                pageIndex++;
-                return computeNext();
-            }
-            else {
+            if (currentPage == null || (pages.isEmpty() && inPageIndex >= currentPage.getPositionCount())) {
                 return endOfData();
             }
-        }
-
-        rowPosition++;
-
-        List<Object> values = new ArrayList<>(columns.size());
-
-        for (int channel = 0; channel < currentPage.getChannelCount(); channel++) {
-            Type type = types.get(channel);
-            Block block = currentPage.getBlock(channel);
-
-            try {
-                values.add(channel, type.getObjectValue(session, block, pagePosition));
+            else if (inPageIndex >= currentPage.getPositionCount()) {
+                currentPage = pages.pollFirst();
+                checkNotNull(currentPage, "currentPage is null");
+                inPageIndex = 0;
             }
-            catch (Throwable throwable) {
-                values.add(channel, null);
 
-                final int currentChannel = channel;
-                exceptionConsumers.forEach(consumer -> consumer.accept(new TypeSerializationException(
-                        throwable,
-                        columns.get(currentChannel),
-                        pagePosition,
-                        currentChannel)));
+            rowPosition++;
+            List<Object> values = new ArrayList<>(columns.size());
+
+            for (int channel = 0; channel < currentPage.getChannelCount(); channel++) {
+                Type type = types.get(channel);
+                Block block = currentPage.getBlock(channel);
+
+                try {
+                    values.add(channel, type.getObjectValue(session, block, inPageIndex));
+                }
+                catch (Throwable throwable) {
+                    handleException(rowPosition, channel, throwable);
+                    continue loop;
+                }
             }
-        }
 
-        return unmodifiableList(values);
+            return unmodifiableList(values);
+        }
+    }
+
+    private void handleException(final int row, final int column, final Throwable cause)
+    {
+        // columns and rows are 0-indexed
+        TypeSerializationException exception = new TypeSerializationException(
+                cause,
+                columns.get(column).getName(),
+                columns.get(column).getType(),
+                row + 1,
+                column + 1);
+
+        exceptions.add(exception);
+    }
+
+    public List<TypeSerializationException> getSerializationExceptions()
+    {
+        return ImmutableList.copyOf(exceptions);
     }
 
     @Override
@@ -158,11 +165,24 @@ public class RowIterables
                 .orElse(0);
     }
 
+    @Override
+    public String toString()
+    {
+        return MoreObjects.toStringHelper(this)
+                .add("types", types)
+                .add("columns", columns)
+                .add("rowsCount", getTotalRows())
+                .toString();
+    }
+
+    public static RowIterables empty(ConnectorSession session)
+    {
+        return new RowIterables(session, ImmutableList.of(), ImmutableList.of(), ImmutableList.of());
+    }
+
     public static class Builder
     {
         private final ConnectorSession connectorSession;
-        private final List<Consumer<TypeSerializationException>> listeners;
-
         private List<Page> pages = Lists.newArrayList();
         private List<Type> types = emptyList();
         private List<Column> columns = emptyList();
@@ -170,7 +190,6 @@ public class RowIterables
         public Builder(ConnectorSession connectorSession)
         {
             this.connectorSession = requireNonNull(connectorSession, "connectorSession is null");
-            this.listeners = Lists.newArrayList();
         }
 
         public Builder add(Page page)
@@ -207,17 +226,10 @@ public class RowIterables
             return this;
         }
 
-        public Builder withExceptionListener(Consumer<TypeSerializationException> listener)
-        {
-            listeners.add(requireNonNull(listener, "listener is null"));
-            return this;
-        }
-
         public RowIterables build()
         {
             return new RowIterables(
                     connectorSession,
-                    ImmutableList.copyOf(listeners),
                     ImmutableList.copyOf(types),
                     ImmutableList.copyOf(columns),
                     ImmutableList.copyOf(pages));

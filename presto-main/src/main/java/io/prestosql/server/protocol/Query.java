@@ -48,7 +48,6 @@ import io.prestosql.execution.buffer.SerializedPage;
 import io.prestosql.operator.ExchangeClient;
 import io.prestosql.spi.ErrorCode;
 import io.prestosql.spi.Page;
-import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.PrestoWarning;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.WarningCode;
@@ -77,7 +76,6 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.function.Consumer;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -90,7 +88,6 @@ import static io.prestosql.SystemSessionProperties.isExchangeCompressionEnabled;
 import static io.prestosql.execution.QueryState.FAILED;
 import static io.prestosql.server.protocol.Slug.Context.EXECUTING_QUERY;
 import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
-import static io.prestosql.spi.StandardErrorCode.SERIALIZATION_ERROR;
 import static io.prestosql.util.Failures.toFailure;
 import static io.prestosql.util.MoreLists.mappedCopy;
 import static java.lang.String.format;
@@ -370,24 +367,9 @@ class Query
         return Optional.empty();
     }
 
-    private static Consumer<TypeSerializationException> interceptSerializationExceptions(QueryManager queryManager, QueryId id)
+    private synchronized void logSerializationException(TypeSerializationException error)
     {
-        return error -> {
-            log.warn("Query %s could not serialize value at row %d, column '%s' of type %s",
-                    id,
-                    error.getRow(),
-                    error.getColumnName().getName(),
-                    error.getColumnName().getType(),
-                    error.getException());
-
-            queryManager.failQuery(id, new PrestoException(
-                    SERIALIZATION_ERROR,
-                    format("Could not serialize value at row %d, column '%s' of type %s: ",
-                            error.getRow(),
-                            error.getColumnName().getName(),
-                            error.getColumnName().getType()),
-                    error.getException()));
-        };
+        log.warn("Query %s serialization failed", queryId, error);
     }
 
     private synchronized QueryResults getNextResult(long token, UriInfo uriInfo, String scheme, DataSize targetResultSize)
@@ -413,7 +395,6 @@ class Query
         // the pages will be lost.
         RowIterables.Builder rows = RowIterables
                 .builder(session.toConnectorSession())
-                .withExceptionListener(interceptSerializationExceptions(queryManager, queryId))
                 .withColumns(columns)
                 .withTypes(types);
 
@@ -506,7 +487,6 @@ class Query
                 queryHtmlUri,
                 partialCancelUri,
                 nextResultsUri,
-                data.getColumns(),
                 data,
                 toStatementStats(queryInfo),
                 toQueryError(queryInfo),

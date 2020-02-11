@@ -21,13 +21,13 @@ import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import io.prestosql.client.QueryError;
-import io.prestosql.client.QueryResults;
 import io.prestosql.client.StatementStats;
 import io.prestosql.dispatcher.DispatcherConfig.HeaderSupport;
 import io.prestosql.execution.ExecutionFailureInfo;
 import io.prestosql.execution.QueryState;
 import io.prestosql.server.HttpRequestSessionContext;
 import io.prestosql.server.SessionContext;
+import io.prestosql.server.protocol.QueryResults;
 import io.prestosql.server.protocol.Slug;
 import io.prestosql.spi.ErrorCode;
 import io.prestosql.spi.QueryId;
@@ -261,7 +261,6 @@ public class QueuedStatementResource
                 getQueryHtmlUri(queryId, uriInfo, xForwardedProto),
                 null,
                 nextUri,
-                null,
                 null,
                 StatementStats.builder()
                         .setState(state.toString())

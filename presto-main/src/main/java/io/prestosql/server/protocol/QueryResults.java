@@ -14,9 +14,11 @@
 package io.prestosql.server.protocol;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import com.google.common.collect.ImmutableList;
 import io.prestosql.client.Column;
 import io.prestosql.client.QueryError;
+import io.prestosql.client.SerializationError;
 import io.prestosql.client.StatementStats;
 import io.prestosql.client.Warning;
 
@@ -28,16 +30,17 @@ import java.util.List;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
+import static io.prestosql.util.MoreLists.mappedCopy;
 import static java.util.Objects.requireNonNull;
 
 @Immutable
+@JsonPropertyOrder({"data", "serializationExceptions"})
 public class QueryResults
 {
     private final String id;
     private final URI infoUri;
     private final URI partialCancelUri;
     private final URI nextUri;
-    private final List<Column> columns;
     private final RowIterables data;
     private final StatementStats stats;
     private final QueryError error;
@@ -50,7 +53,6 @@ public class QueryResults
             URI infoUri,
             URI partialCancelUri,
             URI nextUri,
-            List<Column> columns,
             RowIterables data,
             StatementStats stats,
             QueryError error,
@@ -62,9 +64,7 @@ public class QueryResults
         this.infoUri = requireNonNull(infoUri, "infoUri is null");
         this.partialCancelUri = partialCancelUri;
         this.nextUri = nextUri;
-        this.columns = (columns != null) ? ImmutableList.copyOf(columns) : null;
-        this.data = requireNonNull(data, "data is empty");
-        checkArgument(data.isEmpty() || columns != null, "data present without columns");
+        this.data = data;
         this.stats = requireNonNull(stats, "stats is null");
         this.error = error;
         this.warnings = ImmutableList.copyOf(requireNonNull(warnings, "warnings is null"));
@@ -102,7 +102,11 @@ public class QueryResults
     @JsonProperty
     public List<Column> getColumns()
     {
-        return columns;
+        if (data == null) {
+            return ImmutableList.of();
+        }
+
+        return data.getColumns();
     }
 
     @Nullable
@@ -145,6 +149,24 @@ public class QueryResults
         return updateCount;
     }
 
+    @Nullable
+    @JsonProperty
+    public List<SerializationError> getSerializationExceptions()
+    {
+        if (data == null) {
+            return ImmutableList.of();
+        }
+
+        return mappedCopy(data.getSerializationExceptions(), exception ->
+                new SerializationError(
+                        exception.getRow(),
+                        exception.getColumn(),
+                        exception.getColumnName(),
+                        exception.getColumnType(),
+                        exception.getMessage()
+                ));
+    }
+
     public String toString()
     {
         return toStringHelper(this)
@@ -152,10 +174,11 @@ public class QueryResults
                 .add("infoUri", infoUri)
                 .add("partialCancelUri", partialCancelUri)
                 .add("nextUri", nextUri)
-                .add("columns", columns)
-                .add("hasData", data != null)
+                .add("columns", data.getColumns())
+                .add("data", data)
                 .add("stats", stats)
                 .add("error", error)
+                .add("warnings", warnings)
                 .add("updateType", updateType)
                 .add("updateCount", updateCount)
                 .toString();

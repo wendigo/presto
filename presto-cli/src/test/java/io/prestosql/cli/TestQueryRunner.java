@@ -138,7 +138,8 @@ public class TestQueryRunner
                 null,
                 ImmutableList.of(),
                 null,
-                null);
+                null,
+                ImmutableList.of());
         return QUERY_RESULTS_CODEC.toJson(queryResults);
     }
 

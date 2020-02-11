@@ -17,7 +17,6 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
 
-import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 
 import java.net.URI;
@@ -39,6 +38,7 @@ public class QueryResults
     private final URI partialCancelUri;
     private final URI nextUri;
     private final List<Column> columns;
+    private List<SerializationError> serializationExceptions;
     private final Iterable<List<Object>> data;
     private final StatementStats stats;
     private final QueryError error;
@@ -58,131 +58,94 @@ public class QueryResults
             @JsonProperty("error") QueryError error,
             @JsonProperty("warnings") List<Warning> warnings,
             @JsonProperty("updateType") String updateType,
-            @JsonProperty("updateCount") Long updateCount)
-    {
-        this(
-                id,
-                infoUri,
-                partialCancelUri,
-                nextUri,
-                columns,
-                fixData(columns, data),
-                stats,
-                error,
-                firstNonNull(warnings, ImmutableList.of()),
-                updateType,
-                updateCount);
-    }
-
-    public QueryResults(
-            String id,
-            URI infoUri,
-            URI partialCancelUri,
-            URI nextUri,
-            List<Column> columns,
-            Iterable<List<Object>> data,
-            StatementStats stats,
-            QueryError error,
-            List<Warning> warnings,
-            String updateType,
-            Long updateCount)
+            @JsonProperty("updateCount") Long updateCount,
+            @JsonProperty("serializationExceptions") List<SerializationError> serializationExceptions)
     {
         this.id = requireNonNull(id, "id is null");
         this.infoUri = requireNonNull(infoUri, "infoUri is null");
         this.partialCancelUri = partialCancelUri;
         this.nextUri = nextUri;
         this.columns = (columns != null) ? ImmutableList.copyOf(columns) : null;
-        this.data = (data != null) ? unmodifiableIterable(data) : null;
+        this.serializationExceptions = ImmutableList.copyOf(firstNonNull(serializationExceptions, ImmutableList.of()));
+        this.data = (data != null) ? unmodifiableIterable(fixData(columns, data)) : null;
         checkArgument(data == null || columns != null, "data present without columns");
         this.stats = requireNonNull(stats, "stats is null");
         this.error = error;
-        this.warnings = ImmutableList.copyOf(requireNonNull(warnings, "warnings is null"));
+        this.warnings = ImmutableList.copyOf(firstNonNull(warnings, ImmutableList.of()));
         this.updateType = updateType;
         this.updateCount = updateCount;
     }
 
-    @JsonProperty
     @Override
     public String getId()
     {
         return id;
     }
 
-    @JsonProperty
     @Override
     public URI getInfoUri()
     {
         return infoUri;
     }
 
-    @Nullable
-    @JsonProperty
     @Override
     public URI getPartialCancelUri()
     {
         return partialCancelUri;
     }
 
-    @Nullable
-    @JsonProperty
     @Override
     public URI getNextUri()
     {
         return nextUri;
     }
 
-    @Nullable
-    @JsonProperty
     @Override
     public List<Column> getColumns()
     {
         return columns;
     }
 
-    @Nullable
-    @JsonProperty
     @Override
     public Iterable<List<Object>> getData()
     {
         return data;
     }
 
-    @JsonProperty
     @Override
     public StatementStats getStats()
     {
         return stats;
     }
 
-    @Nullable
-    @JsonProperty
     @Override
     public QueryError getError()
     {
         return error;
     }
 
-    @JsonProperty
     @Override
     public List<Warning> getWarnings()
     {
         return warnings;
     }
 
-    @Nullable
-    @JsonProperty
     @Override
     public String getUpdateType()
     {
         return updateType;
     }
 
-    @Nullable
-    @JsonProperty
     @Override
     public Long getUpdateCount()
     {
         return updateCount;
+    }
+
+    @Override
+    public List<SerializationError> getSerializationErrors()
+    {
+        return serializationExceptions;
     }
 
     @Override
@@ -199,6 +162,7 @@ public class QueryResults
                 .add("error", error)
                 .add("updateType", updateType)
                 .add("updateCount", updateCount)
+                .add("serializationExceptions", serializationExceptions)
                 .toString();
     }
 }

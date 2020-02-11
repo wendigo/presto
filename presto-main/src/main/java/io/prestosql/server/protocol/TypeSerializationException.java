@@ -13,33 +13,40 @@
  */
 package io.prestosql.server.protocol;
 
-import io.prestosql.client.Column;
-
-import static com.google.common.base.MoreObjects.toStringHelper;
+import static java.lang.String.format;
 
 public class TypeSerializationException
+        extends Throwable
 {
-    private final Throwable exception;
-    private final Column columnName;
-    private final int column;
+    private final Throwable cause;
+    private final String columnName;
+    private final String columnType;
     private final int row;
+    private final int column;
 
-    public TypeSerializationException(Throwable exception, Column columnName, int column, int row)
+    public TypeSerializationException(Throwable cause, String columnName, String columnType, int row, int column)
     {
-        this.exception = exception;
+        super(format("Could not serialize '%s' type value at row: %d, column: %d ('%s')", columnType, row, column, columnName), cause);
+        this.cause = cause;
         this.columnName = columnName;
-        this.column = column;
+        this.columnType = columnType;
         this.row = row;
+        this.column = column;
     }
 
-    public Throwable getException()
+    public Throwable getCause()
     {
-        return exception;
+        return cause;
     }
 
-    public Column getColumnName()
+    public String getColumnName()
     {
         return columnName;
+    }
+
+    public String getColumnType()
+    {
+        return columnType;
     }
 
     public int getColumn()
@@ -50,16 +57,5 @@ public class TypeSerializationException
     public int getRow()
     {
         return row;
-    }
-
-    @Override
-    public String toString()
-    {
-        return toStringHelper(this)
-                .add("exception", exception)
-                .add("columnName", columnName)
-                .add("column", column)
-                .add("row", row)
-                .toString();
     }
 }
