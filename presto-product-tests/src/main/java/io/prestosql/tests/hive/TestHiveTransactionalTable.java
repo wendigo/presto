@@ -53,9 +53,12 @@ public class TestHiveTransactionalTable
 {
     private static final Logger log = Logger.get(TestHiveTransactionalTable.class);
 
-    @Test(groups = {STORAGE_FORMATS, HIVE_TRANSACTIONAL}, dataProvider = "partitioningAndBucketingTypeDataProvider", timeOut = 5 * 30 * 1000)
-    public void testReadFullAcid(boolean isPartitioned, BucketingType bucketingType)
+    @Test(groups = {STORAGE_FORMATS, HIVE_TRANSACTIONAL}, timeOut = 5 * 30 * 1000)
+    public void testReadFullAcid()
     {
+        boolean isPartitioned = true;
+        BucketingType bucketingType = BucketingType.NONE;
+
         if (getHiveVersionMajor() < 3) {
             throw new SkipException("Presto Hive transactional tables are supported with Hive version 3 or above");
         }
