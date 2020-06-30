@@ -53,8 +53,15 @@ public class TestHiveTransactionalTable
 {
     private static final Logger log = Logger.get(TestHiveTransactionalTable.class);
 
-    @Test(groups = {STORAGE_FORMATS, HIVE_TRANSACTIONAL}, timeOut = 5 * 30 * 1000)
-    public void testReadFullAcid()
+    @Test(groups = {STORAGE_FORMATS, HIVE_TRANSACTIONAL}, timeOut = 60 * 60 * 1000)
+    public void runFullAcid100Times()
+    {
+        for (int i = 0; i < 100; i++) {
+            readFullAcid();
+        }
+    }
+
+    public void readFullAcid()
     {
         boolean isPartitioned = true;
         BucketingType bucketingType = BucketingType.NONE;
