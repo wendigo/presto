@@ -468,7 +468,7 @@ class Query
                 nextResultsUri,
                 resultRows.getColumns().orElse(null),
                 resultRows.isEmpty() ? null : resultRows, // client excepts null that indicates "no data"
-                toStatementStats(queryInfo),
+                toStatementStats(queryInfo, typeSerializationException),
                 toQueryError(queryInfo, typeSerializationException),
                 mappedCopy(queryInfo.getWarnings(), Query::toClientWarning),
                 queryInfo.getUpdateType(),
@@ -687,13 +687,18 @@ class Query
         throw new IllegalArgumentException("Unsupported kind: " + parameter.getKind());
     }
 
-    private static StatementStats toStatementStats(QueryInfo queryInfo)
+    private static StatementStats toStatementStats(QueryInfo queryInfo, Optional<Throwable> typeSerializationException)
     {
         QueryStats queryStats = queryInfo.getQueryStats();
         StageInfo outputStage = queryInfo.getOutputStage().orElse(null);
 
+        QueryState finalState = typeSerializationException.map(ignored -> FAILED)
+                .orElse(queryInfo.getState());
+
+        log.info("Final query state is: " + finalState.name());
+
         return StatementStats.builder()
-                .setState(queryInfo.getState().toString())
+                .setState(finalState.toString())
                 .setQueued(queryInfo.getState() == QueryState.QUEUED)
                 .setScheduled(queryInfo.isScheduled())
                 .setNodes(globalUniqueNodes(outputStage).size())
