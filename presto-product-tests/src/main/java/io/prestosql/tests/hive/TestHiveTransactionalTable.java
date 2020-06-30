@@ -15,6 +15,7 @@ package io.prestosql.tests.hive;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import io.prestosql.tempto.query.QueryResult;
 import io.prestosql.tests.hive.util.TemporaryHiveTable;
@@ -39,7 +40,6 @@ import static io.prestosql.tests.TestGroups.STORAGE_FORMATS;
 import static io.prestosql.tests.hive.TestHiveTransactionalTable.CompactionMode.MAJOR;
 import static io.prestosql.tests.hive.TestHiveTransactionalTable.CompactionMode.MINOR;
 import static io.prestosql.tests.hive.TransactionalTableType.ACID;
-import static io.prestosql.tests.hive.TransactionalTableType.INSERT_ONLY;
 import static io.prestosql.tests.hive.util.TemporaryHiveTable.randomTableSuffix;
 import static io.prestosql.tests.utils.QueryExecutors.onHive;
 import static java.lang.String.format;
@@ -51,7 +51,9 @@ import static org.testng.Assert.assertEquals;
 public class TestHiveTransactionalTable
         extends HiveProductTest
 {
-    @Test(groups = {STORAGE_FORMATS, HIVE_TRANSACTIONAL}, dataProvider = "partitioningAndBucketingTypeDataProvider", timeOut = 5 * 60 * 1000)
+    private static final Logger log = Logger.get(TestHiveTransactionalTable.class);
+
+    @Test(groups = {STORAGE_FORMATS, HIVE_TRANSACTIONAL}, dataProvider = "partitioningAndBucketingTypeDataProvider", timeOut = 5 * 30 * 1000)
     public void testReadFullAcid(boolean isPartitioned, BucketingType bucketingType)
     {
         if (getHiveVersionMajor() < 3) {
@@ -67,99 +69,34 @@ public class TestHiveTransactionalTable
                     hiveTableProperties(ACID, bucketingType));
 
             String hivePartitionString = isPartitioned ? " PARTITION (part_col=2) " : "";
-            onHive().executeQuery("INSERT OVERWRITE TABLE " + tableName + hivePartitionString + " VALUES (21, 1)");
+            executeHiveQuery("INSERT OVERWRITE TABLE " + tableName + hivePartitionString + " VALUES (21, 1)");
 
             String selectFromOnePartitionsSql = "SELECT col, fcol FROM " + tableName + " ORDER BY col";
             assertThat(query(selectFromOnePartitionsSql)).containsOnly(row(21, 1));
 
-            onHive().executeQuery("INSERT INTO TABLE " + tableName + hivePartitionString + " VALUES (22, 2)");
+            executeHiveQuery("INSERT INTO TABLE " + tableName + hivePartitionString + " VALUES (22, 2)");
             assertThat(query(selectFromOnePartitionsSql)).containsExactly(row(21, 1), row(22, 2));
 
             // test filtering
             assertThat(query("SELECT col, fcol FROM " + tableName + " WHERE fcol = 1 ORDER BY col")).containsOnly(row(21, 1));
 
             // test minor compacted data read
-            onHive().executeQuery("INSERT INTO TABLE " + tableName + hivePartitionString + " VALUES (20, 3)");
-            compactTableAndWait(MINOR, tableName, hivePartitionString, Duration.valueOf("5m"));
+            executeHiveQuery("INSERT INTO TABLE " + tableName + hivePartitionString + " VALUES (20, 3)");
+            compactTableAndWait(MINOR, tableName, hivePartitionString, Duration.valueOf("2m"));
             assertThat(query(selectFromOnePartitionsSql)).containsExactly(row(20, 3), row(21, 1), row(22, 2));
 
             // delete a row
-            onHive().executeQuery("DELETE FROM " + tableName + " WHERE fcol=2");
+            executeHiveQuery("DELETE FROM " + tableName + " WHERE fcol=2");
             assertThat(query(selectFromOnePartitionsSql)).containsExactly(row(20, 3), row(21, 1));
 
             // update the existing row
             String predicate = "fcol = 1" + (isPartitioned ? " AND part_col = 2 " : "");
-            onHive().executeQuery("UPDATE " + tableName + " SET col = 23 WHERE " + predicate);
+            executeHiveQuery("UPDATE " + tableName + " SET col = 23 WHERE " + predicate);
             assertThat(query(selectFromOnePartitionsSql)).containsExactly(row(20, 3), row(23, 1));
 
             // test major compaction
-            compactTableAndWait(MAJOR, tableName, hivePartitionString, Duration.valueOf("5m"));
+            compactTableAndWait(MAJOR, tableName, hivePartitionString, Duration.valueOf("2m"));
             assertThat(query(selectFromOnePartitionsSql)).containsExactly(row(20, 3), row(23, 1));
-        }
-    }
-
-    @Test(groups = {STORAGE_FORMATS, HIVE_TRANSACTIONAL}, dataProvider = "partitioningAndBucketingTypeDataProvider", timeOut = 5 * 60 * 1000)
-    public void testReadInsertOnly(boolean isPartitioned, BucketingType bucketingType)
-    {
-        if (getHiveVersionMajor() < 3) {
-            throw new SkipException("Presto Hive transactional tables are supported with Hive version 3 or above");
-        }
-
-        try (TemporaryHiveTable table = TemporaryHiveTable.temporaryHiveTable(tableName("insert_only", isPartitioned, bucketingType))) {
-            String tableName = table.getName();
-
-            onHive().executeQuery("CREATE TABLE " + tableName + " (col INT) " +
-                    (isPartitioned ? "PARTITIONED BY (part_col INT) " : "") +
-                    bucketingType.getHiveClustering("col", 4) + " " +
-                    "STORED AS ORC " +
-                    hiveTableProperties(INSERT_ONLY, bucketingType));
-
-            String hivePartitionString = isPartitioned ? " PARTITION (part_col=2) " : "";
-            String predicate = isPartitioned ? " WHERE part_col = 2 " : "";
-
-            onHive().executeQuery("INSERT OVERWRITE TABLE " + tableName + hivePartitionString + " SELECT 1");
-            String selectFromOnePartitionsSql = "SELECT col FROM " + tableName + predicate + " ORDER BY COL";
-            assertThat(query(selectFromOnePartitionsSql)).containsOnly(row(1));
-
-            onHive().executeQuery("INSERT INTO TABLE " + tableName + hivePartitionString + " SELECT 2");
-            assertThat(query(selectFromOnePartitionsSql)).containsExactly(row(1), row(2));
-
-            // test minor compacted data read
-            compactTableAndWait(MINOR, tableName, hivePartitionString, Duration.valueOf("5m"));
-            assertThat(query(selectFromOnePartitionsSql)).containsExactly(row(1), row(2));
-
-            onHive().executeQuery("INSERT OVERWRITE TABLE " + tableName + hivePartitionString + " SELECT 3");
-            assertThat(query(selectFromOnePartitionsSql)).containsOnly(row(3));
-
-            if (getHiveVersionMajor() >= 4) {
-                // Major compaction on insert only table does not work prior to Hive 4:
-                // https://issues.apache.org/jira/browse/HIVE-21280
-
-                // test major compaction
-                onHive().executeQuery("INSERT INTO TABLE " + tableName + hivePartitionString + " SELECT 4");
-                compactTableAndWait(MAJOR, tableName, hivePartitionString, Duration.valueOf("5m"));
-                assertThat(query(selectFromOnePartitionsSql)).containsOnly(row(3), row(4));
-            }
-        }
-    }
-
-    @Test(groups = {STORAGE_FORMATS, HIVE_TRANSACTIONAL})
-    public void testFailAcidBeforeHive3()
-    {
-        if (getHiveVersionMajor() >= 3) {
-            throw new SkipException("This tests behavior of ACID table before Hive 3 ");
-        }
-
-        try (TemporaryHiveTable table = TemporaryHiveTable.temporaryHiveTable("test_fail_acid_before_hive3_" + randomTableSuffix())) {
-            String tableName = table.getName();
-            onHive().executeQuery("" +
-                    "CREATE TABLE " + tableName + "(a bigint) " +
-                    "CLUSTERED BY(a) INTO 4 BUCKETS " +
-                    "STORED AS ORC " +
-                    "TBLPROPERTIES ('transactional'='true')");
-
-            assertThat(() -> query("SELECT * FROM " + tableName))
-                    .failsWithMessage("Failed to open transaction. Transactional tables support requires Hive metastore version at least 3.0");
         }
     }
 
@@ -182,10 +119,21 @@ public class TestHiveTransactionalTable
         return tableProperties.build().stream().collect(joining(",", "TBLPROPERTIES (", ")"));
     }
 
+    private static QueryResult executeHiveQuery(String query)
+    {
+        log.info("Executing hive query: " + query);
+        QueryResult queryResult = onHive().executeQuery(query);
+        log.info("Executed hive query: " + query + ", rows: " + queryResult.rows());
+
+        return queryResult;
+    }
+
     private static void compactTableAndWait(CompactionMode compactMode, String tableName, String partitionString, Duration timeout)
     {
         assertEquals(getTableCompactions(compactMode, tableName).count(), 0);
-        onHive().executeQuery(format("ALTER TABLE %s %s COMPACT '%s'", tableName, partitionString, compactMode.name())).getRowsCount();
+        executeHiveQuery(format("ALTER TABLE %s %s COMPACT '%s'", tableName, partitionString, compactMode.name())).getRowsCount();
+
+        log.info("Started compaction on table state: " + tableName);
 
         // Since we disabled table auto compaction and we checked that there are no compaction to the table
         // we can assume that every compaction from now on is triggered in this test
@@ -193,6 +141,8 @@ public class TestHiveTransactionalTable
         assertEventually(timeout, () -> {
             Map<String, String> compaction = getOnlyElement(getTableCompactions(compactMode, tableName)
                     .collect(toImmutableList()));
+
+            log.info("Compaction state: " + compaction);
 
             verify(!compaction.get("state").equals("failed"), "compaction has failed");
             assertEquals(compaction.get("state"), "succeeded");
