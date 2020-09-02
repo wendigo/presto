@@ -22,10 +22,13 @@ import io.prestosql.testng.services.Flaky;
 import io.prestosql.tests.hive.util.TemporaryHiveTable;
 import net.jodah.failsafe.Failsafe;
 import net.jodah.failsafe.RetryPolicy;
+import org.assertj.core.util.Throwables;
 import org.testng.SkipException;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -397,11 +400,29 @@ public class TestHiveTransactionalTable
                 .run(() -> tryCompactingTable(compactMode, tableName, partitionString, Duration.valueOf("60s")));
     }
 
+    private static void displayTransactions()
+    {
+        ImmutableList<Map<String, String>> transactions = Stream.of(onHive().executeQuery("SHOW TRANSACTIONS"))
+                .flatMap(TestHiveTransactionalTable::mapRows)
+                .collect(toImmutableList());
+
+        for (Map<String, String> transaction : transactions) {
+            log.info("Transaction %s, state: %s, owner: %s, start: %s, hearbeat: %s",
+                    transaction.get("Transaction ID"),
+                    transaction.get("Transaction State"),
+                    transaction.get("User"),
+                    transaction.get("Started Time"),
+                    transaction.get("Last Heartbeat Time"));
+        }
+    }
+
     private static void tryCompactingTable(CompactionMode compactMode, String tableName, String partitionString, Duration timeout)
             throws TimeoutException
     {
+        displayTransactions();
         Instant beforeCompactionStart = Instant.now();
         onHive().executeQuery(format("ALTER TABLE %s %s COMPACT '%s'", tableName, partitionString, compactMode.name())).getRowsCount();
+        displayTransactions();
 
         log.info("Started compactions after %s: %s", beforeCompactionStart, getTableCompactions(compactMode, tableName, Optional.empty()));
 
