@@ -67,8 +67,8 @@ public class GroupIdOperator
                 Arrays.fill(groupingSetInputs[i], -1);
 
                 // anything else is an input column to copy
-                for (int outputChannel : groupingSetMappings.get(i).keySet()) {
-                    groupingSetInputs[i][outputChannel] = groupingSetMappings.get(i).get(outputChannel);
+                for (Map.Entry<Integer, Integer> entry : groupingSetMappings.get(i).entrySet()) {
+                    groupingSetInputs[i][entry.getKey()] = entry.getValue();
                 }
             }
 

@@ -13,6 +13,7 @@
  */
 package io.prestosql.sql.planner.sanity;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ListMultimap;
 import io.prestosql.Session;
 import io.prestosql.execution.warnings.WarningCollector;
@@ -36,6 +37,7 @@ import io.prestosql.type.FunctionType;
 import io.prestosql.type.TypeCoercion;
 import io.prestosql.type.UnknownType;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -135,11 +137,11 @@ public final class TypeValidator
             visitPlan(node, context);
 
             ListMultimap<Symbol, Symbol> symbolMapping = node.getSymbolMapping();
-            for (Symbol keySymbol : symbolMapping.keySet()) {
-                List<Symbol> valueSymbols = symbolMapping.get(keySymbol);
-                Type expectedType = types.get(keySymbol);
+            for (Map.Entry<Symbol, Collection<Symbol>> entry : symbolMapping.asMap().entrySet()) {
+                List<Symbol> valueSymbols = ImmutableList.copyOf(entry.getValue());
+                Type expectedType = types.get(entry.getKey());
                 for (Symbol valueSymbol : valueSymbols) {
-                    verifyTypeSignature(keySymbol, expectedType, types.get(valueSymbol));
+                    verifyTypeSignature(entry.getKey(), expectedType, types.get(valueSymbol));
                 }
             }
 

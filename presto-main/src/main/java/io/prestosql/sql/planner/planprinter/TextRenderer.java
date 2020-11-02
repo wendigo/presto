@@ -156,9 +156,10 @@ public class TextRenderer
 
         Map<String, String> translatedOperatorTypes = translateOperatorTypes(stats.getOperatorTypes());
 
-        for (String operator : translatedOperatorTypes.keySet()) {
-            String translatedOperatorType = translatedOperatorTypes.get(operator);
-            double inputAverage = inputAverages.get(operator);
+        for (Map.Entry<String, String> entry : translatedOperatorTypes.entrySet()) {
+            String operator = entry.getKey();
+            String translatedOperatorType = entry.getValue();
+            double inputAverage = inputAverages.get(entry.getKey());
 
             output.append(translatedOperatorType);
             output.append(format(Locale.US, "Input avg.: %s rows, Input std.dev.: %s%%\n",

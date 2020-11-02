@@ -1177,8 +1177,8 @@ public class LocalExecutionPlanner
                     setMapping.put(newLayout.get(output), source.getLayout().get(node.getGroupingColumns().get(output)));
                 }
 
-                for (Symbol output : argumentMappings.keySet()) {
-                    setMapping.put(newLayout.get(output), argumentMappings.get(output));
+                for (Map.Entry<Symbol, Integer> entry : argumentMappings.entrySet()) {
+                    setMapping.put(newLayout.get(entry.getKey()), entry.getValue());
                 }
 
                 mappings.add(setMapping.build());
