@@ -75,7 +75,7 @@ public class TestHiveBasicTableStatistics
                     tableName,
                     location));
             BasicStatistics statistics = getBasicStatisticsForTable(onHive(), tableName);
-            assertThatStatisticsAreNotPresent(statistics);
+            assertThatStatisticsAreNotPresentOrZero(statistics);
         }
         finally {
             onPresto().executeQuery(format("DROP TABLE IF EXISTS %s", tableName));
@@ -156,7 +156,7 @@ public class TestHiveBasicTableStatistics
         try {
             if (getHiveVersionMajor() < 3) {
                 BasicStatistics tableStatistics = getBasicStatisticsForTable(onHive(), tableName);
-                assertThatStatisticsAreNotPresent(tableStatistics);
+                assertThatStatisticsAreNotPresentOrZero(tableStatistics);
             }
 
             BasicStatistics firstPartitionStatistics = getBasicStatisticsForPartition(onHive(), tableName, "n_regionkey=1");
@@ -193,7 +193,7 @@ public class TestHiveBasicTableStatistics
         try {
             if (getHiveVersionMajor() < 3) {
                 BasicStatistics tableStatistics = getBasicStatisticsForTable(onHive(), tableName);
-                assertThatStatisticsAreNotPresent(tableStatistics);
+                assertThatStatisticsAreNotPresentOrZero(tableStatistics);
             }
 
             BasicStatistics partitionStatisticsBefore = getBasicStatisticsForPartition(onHive(), tableName, "n_regionkey=1");
@@ -268,7 +268,7 @@ public class TestHiveBasicTableStatistics
         try {
             if (getHiveVersionMajor() < 3) {
                 BasicStatistics tableStatisticsAfterCreate = getBasicStatisticsForTable(onHive(), tableName);
-                assertThatStatisticsAreNotPresent(tableStatisticsAfterCreate);
+                assertThatStatisticsAreNotPresentOrZero(tableStatisticsAfterCreate);
             }
 
             insertNationData(onPresto(), tableName);
@@ -349,7 +349,7 @@ public class TestHiveBasicTableStatistics
         try {
             if (getHiveVersionMajor() < 3) {
                 BasicStatistics tableStatistics = getBasicStatisticsForTable(onHive(), tableName);
-                assertThatStatisticsAreNotPresent(tableStatistics);
+                assertThatStatisticsAreNotPresentOrZero(tableStatistics);
             }
 
             BasicStatistics firstPartitionStatistics = getBasicStatisticsForPartition(onHive(), tableName, "n_regionkey=1");
@@ -412,12 +412,12 @@ public class TestHiveBasicTableStatistics
         assertThat(statistics.getTotalSize()).isPresent();
     }
 
-    private static void assertThatStatisticsAreNotPresent(BasicStatistics statistics)
+    private static void assertThatStatisticsAreNotPresentOrZero(BasicStatistics statistics)
     {
-        assertThat(statistics.getNumRows()).isNotPresent();
-        assertThat(statistics.getNumFiles()).isNotPresent();
-        assertThat(statistics.getRawDataSize()).isNotPresent();
-        assertThat(statistics.getTotalSize()).isNotPresent();
+        assertThat(statistics.getNumRows().orElse(0L)).isEqualTo(0L);
+        assertThat(statistics.getNumFiles().orElse(0L)).isEqualTo(0L);
+        assertThat(statistics.getRawDataSize().orElse(0L)).isEqualTo(0L);
+        assertThat(statistics.getTotalSize().orElse(0L)).isEqualTo(0L);
     }
 
     private static void assertThatStatisticsValuesHaveIncreased(BasicStatistics first, BasicStatistics second)
