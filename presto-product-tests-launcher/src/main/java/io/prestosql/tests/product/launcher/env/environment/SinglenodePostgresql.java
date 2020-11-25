@@ -40,14 +40,14 @@ public final class SinglenodePostgresql
     // Use non-default PostgreSQL port to avoid conflicts with locally installed PostgreSQL if any.
     public static final int POSTGRESQL_PORT = 15432;
 
-    private final DockerFiles dockerFiles;
+    private final DockerFiles.ResourceProvider resourceProvider;
     private final PortBinder portBinder;
 
     @Inject
     public SinglenodePostgresql(Standard standard, DockerFiles dockerFiles, PortBinder portBinder)
     {
         super(ImmutableList.of(standard));
-        this.dockerFiles = requireNonNull(dockerFiles, "dockerFiles is null");
+        this.resourceProvider = requireNonNull(dockerFiles, "dockerFiles is null").getDockerFilesHostDirectory("conf/environment/singlenode-postgresql");
         this.portBinder = requireNonNull(portBinder, "portBinder is null");
     }
 
@@ -56,7 +56,7 @@ public final class SinglenodePostgresql
     {
         builder.configureContainer(COORDINATOR, container -> container
                 .withCopyFileToContainer(
-                        forHostPath(dockerFiles.getDockerFilesHostPath("conf/environment/singlenode-postgresql/postgresql.properties")),
+                        forHostPath(resourceProvider.getPath("postgresql.properties")),
                         CONTAINER_PRESTO_ETC + "/catalog/postgresql.properties"));
 
         builder.addContainer(createPostgreSql());
